@@ -1,3 +1,31 @@
+def read_graph_with_node_info(filename):
+    import csv
+    G = nx.Graph()
+    with open(filename, newline='') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            source = row[0]
+            target = row[1]
+            G.add_node(source)
+            G.add_node(target)
+            # Infos für source (row[2]) sammeln
+            if len(row) >= 3:
+                if 'info' not in G.nodes[source]:
+                    G.nodes[source]['info'] = []
+                if row[2] and row[2] not in G.nodes[source]['info']:
+                    G.nodes[source]['info'].append(row[2])
+            # Infos für target (row[3]) sammeln
+            if len(row) >= 4:
+                if 'info' not in G.nodes[target]:
+                    G.nodes[target]['info'] = []
+                if row[3] and row[3] not in G.nodes[target]['info']:
+                    G.nodes[target]['info'].append(row[3])
+            G.add_edge(source, target)
+    
+    return G
 import networkx as nx
 
 # Beispielgraph erstellen
@@ -48,32 +76,45 @@ def split_graph_into_components(G):
     return subgraphs
 
 def main():
-    # Beispiel: Gleichmäßige Komponenten
-    G = create_stochastic_block_graph([70,130,50], p_in=0.01, p_out=0.001)
-    #G = create_balanced_components_graph(100, 4, p=0.5)
-    # G = create_random_graph(10000, p=0.0003)
-    # G = create_example_graph()
+
+    # Beispiel: Graph aus CSV mit Node-Infos einlesen
+    G = read_graph_with_node_info('input_graph.csv')
     subgraphs = split_graph_into_components(G)
+
 
     for i, sg in enumerate(subgraphs):
         central = find_central_node(sg)
         print(f"Subgraph {i+1}: Nodes = {list(sg.nodes())}")
         print(f"  Zentralster Knoten: {central}")
+        # Zusatzinfos für alle Knoten ausgeben
+        for node in sg.nodes:
+            info = sg.nodes[node]
+            if info:
+                print(f"    {node}: {info}")
 
 
 
 
     # Die 100 größten Subgraphen in eine gemeinsame CSV exportieren
     top_100 = sorted(subgraphs, key=lambda sg: sg.number_of_nodes(), reverse=True)[:100]
+    total_edges = sum(g.number_of_edges() for g in top_100)
+    total_nodes = sum(g.number_of_nodes() for g in top_100)
+    print(f"Exportiere {total_edges} Kanten aus {len(top_100)} Subgraphen mit insgesamt {total_nodes} Knoten in subgraphs_top100.csv")
+    if total_edges == 0:
+        print("Warnung: Es werden keine Kanten exportiert! Prüfe die Eingabedaten.")
     export_all_graphs_to_csv(top_100, "subgraphs_top100.csv")
     #plot_multiple_graphs_grid(top_100, n_cols=10)
     
 # Exportiert mehrere Graphen in eine gemeinsame CSV (Kantenliste)
 def export_all_graphs_to_csv(graphs, filename):
     import csv
+
+    # Für vereinfachte Variante: nur 'source-info' und 'target-info' als eine Spalte je Knoten
+
     with open(filename, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["source", "target", "order", "degree_source", "degree_target", "dist_to_center"])
+        header = ["source", "target", "order", "degree_source", "degree_target", "dist_to_center", "source_info", "target_info"]
+        writer.writerow(header)
         for idx, G in enumerate(graphs, 1):
             degrees = dict(G.degree())
             # Zentralknoten bestimmen
@@ -89,10 +130,7 @@ def export_all_graphs_to_csv(graphs, filename):
                 lengths = {}
             for u, v in G.edges():
                 def format_node(n):
-                    n_str = str(n)
-                    if n_str.startswith('k'):
-                        n_str = n_str[1:]
-                    return f"T{str(n_str).zfill(12)}"
+                    return str(n)
                 deg_u = degrees.get(u, 0)
                 deg_v = degrees.get(v, 0)
                 dist_u = lengths.get(u, '')
@@ -116,14 +154,21 @@ def export_all_graphs_to_csv(graphs, filename):
                         source, target = v, u
                         deg_source, deg_target = deg_v, deg_u
                     dist_to_center = dist_u if dist_u != '' else dist_v
-                writer.writerow([
+                # Zusatzinfos für source und target sammeln
+                source_info = G.nodes[source] if source in G.nodes else {}
+                target_info = G.nodes[target] if target in G.nodes else {}
+                row = [
                     format_node(source),
                     format_node(target),
                     idx,
                     deg_source,
                     deg_target,
                     dist_to_center
-                ])
+                ]
+                # Alle Infos für source/target mit '|' zusammenfügen
+                row.append('|'.join(source_info.get('info', [])))
+                row.append('|'.join(target_info.get('info', [])))
+                writer.writerow(row)
 
 # Exportiert einen Graphen als CSV (Kantenliste)
 def export_graph_to_csv(G, filename, order=None):
