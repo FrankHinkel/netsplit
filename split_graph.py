@@ -49,7 +49,7 @@ def split_graph_into_components(G):
 
 def main():
     # Beispiel: Gleichmäßige Komponenten
-    G = create_stochastic_block_graph([200,200,200], p_in=0.002, p_out=0.0021)
+    G = create_stochastic_block_graph([70,130,50], p_in=0.01, p_out=0.001)
     #G = create_balanced_components_graph(100, 4, p=0.5)
     # G = create_random_graph(10000, p=0.0003)
     # G = create_example_graph()
@@ -73,21 +73,56 @@ def export_all_graphs_to_csv(graphs, filename):
     import csv
     with open(filename, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["source", "target", "order", "degree_source", "degree_target"])
+        writer.writerow(["source", "target", "order", "degree_source", "degree_target", "dist_to_center"])
         for idx, G in enumerate(graphs, 1):
             degrees = dict(G.degree())
+            # Zentralknoten bestimmen
+            try:
+                center = nx.center(G)
+                center_node = center[0] if center else None
+            except nx.NetworkXError:
+                center_node = None
+            # Kürzeste Wege zum Zentrum berechnen
+            if center_node is not None:
+                lengths = nx.shortest_path_length(G, source=center_node)
+            else:
+                lengths = {}
             for u, v in G.edges():
                 def format_node(n):
                     n_str = str(n)
                     if n_str.startswith('k'):
                         n_str = n_str[1:]
                     return f"T{str(n_str).zfill(12)}"
+                deg_u = degrees.get(u, 0)
+                deg_v = degrees.get(v, 0)
+                dist_u = lengths.get(u, '')
+                dist_v = lengths.get(v, '')
+                # Knoten mit geringerer Entfernung zum Zentrum als source
+                if dist_u != '' and dist_v != '':
+                    if dist_u <= dist_v:
+                        source, target = u, v
+                        deg_source, deg_target = deg_u, deg_v
+                        dist_to_center = dist_u
+                    else:
+                        source, target = v, u
+                        deg_source, deg_target = deg_v, deg_u
+                        dist_to_center = dist_v
+                else:
+                    # Fallback: wie bisher nach Grad
+                    if deg_u >= deg_v:
+                        source, target = u, v
+                        deg_source, deg_target = deg_u, deg_v
+                    else:
+                        source, target = v, u
+                        deg_source, deg_target = deg_v, deg_u
+                    dist_to_center = dist_u if dist_u != '' else dist_v
                 writer.writerow([
-                    format_node(u),
-                    format_node(v),
+                    format_node(source),
+                    format_node(target),
                     idx,
-                    degrees.get(u, 0),
-                    degrees.get(v, 0)
+                    deg_source,
+                    deg_target,
+                    dist_to_center
                 ])
 
 # Exportiert einen Graphen als CSV (Kantenliste)
