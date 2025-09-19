@@ -1,0 +1,3 @@
+supergraph_id,source_community,target_community,weight
+1,0,1,1
+1,1,2,1

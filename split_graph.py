@@ -27,6 +27,63 @@ def read_graph_with_node_info(filename):
     
     return G
 import networkx as nx
+from networkx.algorithms import community as nx_comm
+
+def detect_communities(G, method="greedy"):
+    """Ermittelt Communities (Cluster) im Graphen.
+
+    method:
+        greedy  - Clauset-Newman-Moore (greedy modularity)
+        label   - Asynchrone Label Propagation
+
+    Rückgabe: Liste von Mengen (Knoten pro Community)
+    Zusätzlich wird ein Knotenattribut 'community' (int) gesetzt.
+    """
+    if G.number_of_nodes() == 0:
+        return []
+    if method == "label":
+        comms = list(nx_comm.asyn_lpa_communities(G))
+    else:  # default greedy
+        comms = list(nx_comm.greedy_modularity_communities(G))
+    # Attribut setzen
+    for cid, nodes in enumerate(comms):
+        for n in nodes:
+            G.nodes[n]['community'] = cid
+    return comms
+
+def collapse_graph_by_communities(G, communities):
+    """Fasst Communities zu Superknoten zusammen.
+
+    Erzeugt einen neuen Graphen H:
+        - jeder Community -> ein Knoten (id = community index)
+        - Knoten-Attribut 'original_nodes': Liste der ursprünglichen Knoten
+        - Knoten-Attribut 'size': Anzahl ursprünglicher Knoten
+        - Kanten zwischen Communities erhalten Gewichte (weight = Anzahl Originalkanten, die zwischen den beiden Communities verlaufen)
+    """
+    H = nx.Graph()
+    # Mapping Originalknoten -> Community ID
+    node2comm = {}
+    for cid, nodes in enumerate(communities):
+        for n in nodes:
+            node2comm[n] = cid
+    # Superknoten anlegen
+    for cid, nodes in enumerate(communities):
+        H.add_node(cid, original_nodes=list(nodes), size=len(nodes))
+    # Kanten aggregieren
+    edge_weights = {}
+    for u, v in G.edges():
+        cu = node2comm.get(u)
+        cv = node2comm.get(v)
+        if cu is None or cv is None:
+            continue
+        if cu == cv:
+            continue  # interne Kanten ignorieren
+        if cu > cv:
+            cu, cv = cv, cu  # sort für konsistente key
+        edge_weights[(cu, cv)] = edge_weights.get((cu, cv), 0) + 1
+    for (cu, cv), w in edge_weights.items():
+        H.add_edge(cu, cv, weight=w)
+    return H
 
 # Beispielgraph erstellen
 def create_example_graph():
@@ -83,14 +140,32 @@ def main():
 
 
     for i, sg in enumerate(subgraphs):
+        # Clustering-Koeffizienten berechnen
+        clustering = nx.clustering(sg)
+        avg_clustering = nx.average_clustering(sg)
+        # Werte als Attribut bei jedem Knoten speichern
+        for node in sg.nodes:
+            sg.nodes[node]['clustering'] = clustering.get(node, 0.0)
+            sg.nodes[node]['avg_clustering'] = avg_clustering
         central = find_central_node(sg)
         print(f"Subgraph {i+1}: Nodes = {list(sg.nodes())}")
         print(f"  Zentralster Knoten: {central}")
+        print(f"  Durchschnittlicher Clustering-Koeffizient: {avg_clustering:.3f}")
         # Zusatzinfos für alle Knoten ausgeben
         for node in sg.nodes:
             info = sg.nodes[node]
             if info:
                 print(f"    {node}: {info}")
+
+    # OPTIONAL: Communities im größten Subgraphen erkennen und kollabieren
+    # largest = max(subgraphs, key=lambda g: g.number_of_nodes()) if subgraphs else None
+    # if largest:
+    #     comms = detect_communities(largest, method="greedy")
+    #     print(f"Größter Subgraph: {largest.number_of_nodes()} Knoten, Communities: {len(comms)}")
+    #     H = collapse_graph_by_communities(largest, comms)
+    #     print(f"Collapsed Graph: {H.number_of_nodes()} Superknoten, {H.number_of_edges()} Kanten")
+    #     for n, data in H.nodes(data=True):
+    #         print(f"  Superknoten {n}: size={data['size']}, original_nodes={data['original_nodes'][:10]}{'...' if data['size']>10 else ''}")
 
 
 
@@ -103,6 +178,9 @@ def main():
     if total_edges == 0:
         print("Warnung: Es werden keine Kanten exportiert! Prüfe die Eingabedaten.")
     export_all_graphs_to_csv(top_100, "subgraphs_top100.csv")
+    # Kollabierte Supergraphen (Communities) exportieren
+    export_collapsed_subgraphs(top_100, "collapsed_nodes.csv", "collapsed_edges.csv", community_method="greedy")
+    print("Collapsed Supergraphs in collapsed_nodes.csv und collapsed_edges.csv exportiert.")
     #plot_multiple_graphs_grid(top_100, n_cols=10)
     
 # Exportiert mehrere Graphen in eine gemeinsame CSV (Kantenliste)
@@ -113,7 +191,12 @@ def export_all_graphs_to_csv(graphs, filename):
 
     with open(filename, mode='w', newline='') as f:
         writer = csv.writer(f)
-        header = ["source", "target", "order", "degree_source", "degree_target", "dist_to_center", "source_info", "target_info"]
+        header = [
+            "source", "target", "order", "degree_source", "degree_target", "dist_to_center",
+            "source_info", "target_info",
+            "source_clustering", "target_clustering",
+            "source_avg_clustering", "target_avg_clustering"
+        ]
         writer.writerow(header)
         for idx, G in enumerate(graphs, 1):
             degrees = dict(G.degree())
@@ -163,12 +246,56 @@ def export_all_graphs_to_csv(graphs, filename):
                     idx,
                     deg_source,
                     deg_target,
-                    dist_to_center
+                    dist_to_center,
+                    '|'.join(source_info.get('info', [])),
+                    '|'.join(target_info.get('info', [])),
+                    f"{source_info.get('clustering', 0.0):.5f}",
+                    f"{target_info.get('clustering', 0.0):.5f}",
+                    f"{source_info.get('avg_clustering', 0.0):.5f}",
+                    f"{target_info.get('avg_clustering', 0.0):.5f}"
                 ]
-                # Alle Infos für source/target mit '|' zusammenfügen
-                row.append('|'.join(source_info.get('info', [])))
-                row.append('|'.join(target_info.get('info', [])))
                 writer.writerow(row)
+
+def export_collapsed_subgraphs(graphs, filename_nodes, filename_edges, community_method="greedy"):
+    """Exportiert kollabierte Versionen der Subgraphen.
+
+    Erstellt zwei CSV Dateien:
+      - filename_nodes: supergraph_id, community_id, size, original_nodes ("|"-joined)
+      - filename_edges: supergraph_id, source_community, target_community, weight
+    """
+    import csv
+    total_supernodes = 0
+    total_superedges = 0
+    with open(filename_nodes, 'w', newline='') as fn, open(filename_edges, 'w', newline='') as fe:
+        wn = csv.writer(fn)
+        we = csv.writer(fe)
+        wn.writerow(["supergraph_id", "community_id", "size", "original_nodes"])
+        we.writerow(["supergraph_id", "source_community", "target_community", "weight"])
+        for gid, G in enumerate(graphs, 1):
+            if G.number_of_nodes() == 0:
+                continue
+            comms = detect_communities(G, method=community_method)
+            H = collapse_graph_by_communities(G, comms)
+            # Nodes schreiben
+            for cid, data in H.nodes(data=True):
+                orig_nodes = data.get('original_nodes', [])
+                wn.writerow([
+                    gid,
+                    cid,
+                    data.get('size', len(orig_nodes)),
+                    '|'.join(map(str, orig_nodes))
+                ])
+            total_supernodes += H.number_of_nodes()
+            # Edges schreiben
+            for u, v, edata in H.edges(data=True):
+                we.writerow([
+                    gid,
+                    u,
+                    v,
+                    edata.get('weight', 1)
+                ])
+            total_superedges += H.number_of_edges()
+    print(f"Collapsed Export: {total_supernodes} Superknoten, {total_superedges} Superkanten aus {len(graphs)} Subgraphen")
 
 # Exportiert einen Graphen als CSV (Kantenliste)
 def export_graph_to_csv(G, filename, order=None):
